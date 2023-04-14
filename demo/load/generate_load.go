@@ -152,28 +152,29 @@ func main() {
 	}
 
 	count := 0
+	sendCtx := context.Background()
+
 	// send all transactions through same node
-	for _, tx := range txs {
-		err = client.SendTransaction(ctx, tx)
+	/*
+		for _, tx := range txs {
+			err = client.SendTransaction(sendCtx, tx)
+			if err != nil {
+				fmt.Println(fmt.Sprintf("Failed to send tx via cli: %v", err))
+				utils.Fatalf("transactions sent so far: %d", count)
+			}
+			count++
+		}
+	*/
+
+	// send transactions through different nodes
+	for i, tx := range txs {
+		err = clients[i%len(clients)].SendTransaction(sendCtx, tx)
 		if err != nil {
 			fmt.Println(fmt.Sprintf("Failed to send tx via cli: %v", err))
 			utils.Fatalf("transactions sent so far: %d", count)
 		}
 		count++
 	}
-
-	// send transactions through different nodes
-	/*
-		for i, tx := range txs {
-			err = clients[i%len(clients)].SendTransaction(ctx, tx)
-			if err != nil {
-				fmt.Println(fmt.Sprintf("Failed to send tx via cli: %v", err))
-				utils.Fatalf("transactions sent so far: %d", count)
-			}
-			count++
-			time.Sleep(100 * time.Millisecond)
-		}
-	*/
 	fmt.Println(fmt.Sprintf("sent %d transactions", count))
 
 }
