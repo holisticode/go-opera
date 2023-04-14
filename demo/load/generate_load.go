@@ -167,6 +167,7 @@ func main() {
 	*/
 
 	// send transactions through different nodes
+	start := time.Now()
 	for i, tx := range txs {
 		err = clients[i%len(clients)].SendTransaction(sendCtx, tx)
 		if err != nil {
@@ -175,6 +176,7 @@ func main() {
 		}
 		count++
 	}
-	fmt.Println(fmt.Sprintf("sent %d transactions", count))
+	end := time.Since(start)
+	fmt.Println(fmt.Sprintf("sent %d transactions in %s; transaction rate: %f per second", count, end, float64(count)/end.Seconds()))
 
 }
