@@ -1,0 +1,1 @@
+METRICS_ARGS="--metrics.influxdbv2  --metrics.influxdb.token GkOpKG-R5r13wWd4maeU_Km2-geFUauESTHZYGUctFTZjJRxFWAQEx67VnOEpS3rlTbIYdRLIXuU3tFMo6SohA==  --metrics.influxdb.bucket fantom --metrics.influxdb.organization fantom "

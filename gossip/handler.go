@@ -991,6 +991,7 @@ func (h *handler) handleMsg(p *peer) error {
 		return errResp(ErrMsgTooLarge, "%v > %v", msg.Size, protocolMaxMsgSize)
 	}
 	defer msg.Discard()
+	fmt.Println(fmt.Sprintf("receive: %d", msg.Code))
 	// Acquire semaphore for serialized messages
 	eventsSizeEst := dag.Metric{
 		Num:  1,
