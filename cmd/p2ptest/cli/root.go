@@ -39,7 +39,7 @@ func init() {
 func run(cmd *cobra.Command, args []string) error {
 	seq, err := proto.LoadSequence(sequenceFile)
 	if err != nil {
-		return nil
+		return err 
 	}
 
 	return seq.Run(rpcs)
