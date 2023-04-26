@@ -1,12 +1,17 @@
 {
-	"steps":[
+	"steps": [
 		{
 			"input": {
 				"code": 0
 			},
-			"output": {
-				"code": 0
-			}
+			"output": [
+				{
+					"code": 0
+				},
+				{
+					"code": 1
+				}
+			]
 		}
 	]
 }

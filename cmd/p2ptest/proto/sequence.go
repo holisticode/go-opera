@@ -2,104 +2,118 @@ package proto
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/Fantom-foundation/go-opera/gossip"
-	"github.com/ethereum/go-ethereum/common"
 	"go.uber.org/zap"
 )
 
 type Sequence struct {
 	Steps    []Interaction `json:"steps"`
-	sender   sender
-	receiver receiver
-	logger *zap.Logger
+	p2pLayer p2pProtocolTest
+	logger   *zap.Logger
 }
 
 type Interaction struct {
-	Input  Input  `json:"input"`
-	utput Output `json:"output"`
+	Input  Input    `json:"input"`
+	Output []Output `json:"output"`
+	Label  string
 }
 
 type Input struct {
-	Code uint64 `json:"code"`
-}
-
-func (i Input) ToMsg() interface{} {
-	switch i.Code {
-	case gossip.HandshakeMsg: return gossip.HandshakeData{
-		ProtocolVersion: 63,
-		NetworkID: 0,
-		Genesis: common.HexToHash("0x2c210befc091e71047cc7efb2b7789805c9dbd3081f08e67ecc9ca2236a510c0"),
-	}
-	}
-	return nil
+	Msg  interface{}
+	Code uint64
 }
 
 type Output struct {
-	Content []byte `json:"content"`
+	//Content []byte `json:"content"`
+	Msg    interface{}
+	Code   uint64
+	Verify func(input interface{}, output interface{}) error
 }
 
 var (
-	ErrBytesDontMatch = errors.New("received and expected message do not match")
+	ErrMessageCodesDontMatch = errors.New("received and expected message codes do not match")
+	ErrMessageTimeout        = errors.New("did not receive a message during the expected time")
+	ErrMessageFailedDecoding = errors.New("failed decoding of received message")
+)
+
+const (
+	MaxMessageTimeout = 6 * time.Second
 )
 
 func (seq *Sequence) setup(urls []string) error {
 	var err error
 
-
-	seq.logger,err = zap.NewProduction()
-	if seq.sender == nil {
-		seq.sender,err = NewSender(urls)
+	if seq.p2pLayer == nil {
+		seq.p2pLayer, err = New(urls, seq.logger)
 		if err != nil {
 			return err
 		}
 	}
-	/*
-	if seq.receiver == nil {
-		r,err := NewReceiver() 
-		if err != nil {
-			fmt.Println(err)
-		}
-		seq.receiver = r
-	}
-	*/
 	return nil
 }
 
 func (seq *Sequence) Run(urls []string) error {
-    //defer seq.logger.Sync()
+	defer seq.logger.Sync()
 
-	if err := seq.setup(urls);err != nil {
+	if err := seq.setup(urls); err != nil {
 		return err
 	}
-	seq.logger.Info("setup ok")
+	seq.logger.Debug("setup ok")
 	for i, step := range seq.Steps {
-		seq.logger.Info("sending", zap.Int("step",i))
-		if err := seq.sender.Send(step.Input.ToMsg(), step.Input.Code); err != nil {
+		seq.logger.Info("running step: ", zap.String("step", step.Label))
+		seq.logger.Debug("sending", zap.Int("step", i))
+		if err := seq.p2pLayer.Send(step.Input.Msg, step.Input.Code); err != nil {
 			seq.logger.Error("failed to send", zap.Error(err))
 			return err
 		}
 
-		/*
-		cmsg, err := seq.receiver.Receive()
-		if err != nil {
-			return err
+		received := 0
+		msgTimeout := time.NewTimer(MaxMessageTimeout)
+		// for received < len(step.Output) {
+		loop := true
+		for loop {
+			select {
+			case <-msgTimeout.C:
+				if received == len(step.Output) {
+					seq.logger.Debug("timeout occurred but it was expected to not receive a message here; just continue")
+					loop = false
+					continue
+				}
+				return ErrMessageTimeout
+			case msg := <-seq.p2pLayer.Receive():
+				seq.logger.Debug("received message", zap.Uint64("code", msg.Code))
+				if msg.Code != step.Output[received].Code {
+					return ErrMessageCodesDontMatch
+				}
+
+				//var decodedMsg = reflect.New(reflect.TypeOf(step.Output[received].Msg)).Elem().Interface()
+				var decodedMsg = step.Output[received].Msg
+				if err := msg.Decode(decodedMsg); err != nil {
+					fmt.Println(err)
+					return ErrMessageFailedDecoding
+				}
+				if step.Output[received].Verify != nil {
+					if err := step.Output[received].Verify(step.Input.Msg, decodedMsg); err != nil {
+						return fmt.Errorf("message verification failed: %w", err)
+					}
+				}
+				seq.logger.Debug("step matched")
+				msgTimeout.Reset(MaxMessageTimeout)
+				if msg.Code == gossip.HandshakeMsg {
+					seq.p2pLayer.Send(step.Input.Msg, step.Input.Code)
+				}
+			}
+			received++
+			if received >= len(step.Output) {
+				break
+			}
 		}
 
-		var msg []byte
-
-		select {
-		case msg = <- cmsg :
-		}
-
-		if bytes.Compare(msg, step.Output.Content) != 0 {
-			return ErrBytesDontMatch
-		}
-		*/
+		seq.logger.Info("step successful")
 	}
-
-	time.Sleep(10*time.Second)
 
 	return nil
 }

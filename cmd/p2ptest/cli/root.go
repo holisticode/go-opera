@@ -5,7 +5,9 @@ import (
 	"os"
 
 	"github.com/Fantom-foundation/go-opera/cmd/p2ptest/proto"
+	"github.com/Fantom-foundation/go-opera/cmd/p2ptest/suite"
 	"github.com/spf13/cobra"
+	"go.uber.org/zap"
 )
 
 const (
@@ -15,6 +17,8 @@ const (
 	rpcsFlagShort         = "e"
 	sequenceFileFlag      = "sequence-file"
 	sequenceFileFlagShort = "s"
+	logLevelFlag          = "log-level"
+	logLevelFlagShort     = "l"
 )
 
 var (
@@ -27,19 +31,33 @@ As such, they can be used for different implementations of the protocol, in diff
 		RunE: run,
 	}
 
-	rpcs         []string
+	logLevel     string
 	sequenceFile string
+	rpcs         []string
 )
 
 func init() {
 	rootCmd.PersistentFlags().StringArrayVarP(&rpcs, rpcsFlag, rpcsFlagShort, []string{}, "list of node RPC endpoints")
 	rootCmd.PersistentFlags().StringVarP(&sequenceFile, sequenceFileFlag, sequenceFileFlagShort, "cmd/p2ptest/suite/default.json", "path to file containing sequence of tests")
+	rootCmd.PersistentFlags().StringVarP(&logLevel, logLevelFlag, logLevelFlagShort, "info", "log level to use")
 }
 
 func run(cmd *cobra.Command, args []string) error {
-	seq, err := proto.LoadSequence(sequenceFile)
+	var (
+		logger *zap.Logger
+		err    error
+	)
+
+	cfg := zap.NewProductionConfig()
+	cfg.Level, err = zap.ParseAtomicLevel(logLevel)
+	logger, err = cfg.Build()
 	if err != nil {
-		return err 
+		return err
+	}
+
+	seq, err := proto.LoadSequence(suite.InitialSuite, logger)
+	if err != nil {
+		return err
 	}
 
 	return seq.Run(rpcs)
