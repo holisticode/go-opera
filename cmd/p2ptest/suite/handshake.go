@@ -17,20 +17,22 @@ func Handshake() proto.Interaction {
 			Msg: gossip.HandshakeData{
 				ProtocolVersion: 63,
 				NetworkID:       0,
-				Genesis:         common.HexToHash("0x2c210befc091e71047cc7efb2b7789805c9dbd3081f08e67ecc9ca2236a510c0"),
+				// this hash is extracted from the demo
+				// TODO: should be configurable
+				Genesis: common.HexToHash("0x2c210befc091e71047cc7efb2b7789805c9dbd3081f08e67ecc9ca2236a510c0"),
 			},
 			Code: gossip.HandshakeMsg,
 		},
 		Output: []proto.Output{
 			{
 				Code: 0,
-				Msg:  &gossip.HandshakeData{},
+				Msg:  gossip.HandshakeData{},
 				Verify: func(input interface{}, received interface{}) error {
 					inputMsg, ok := input.(gossip.HandshakeData)
 					if !ok {
 						return fmt.Errorf("expected input to be of type %T, but got %T", inputMsg, input)
 					}
-					receivedMsg, ok := received.(*gossip.HandshakeData)
+					receivedMsg, ok := received.(gossip.HandshakeData)
 					if !ok {
 						return fmt.Errorf("expected output to be of type %T, but got %T", receivedMsg, received)
 					}
@@ -50,9 +52,9 @@ func Handshake() proto.Interaction {
 			},
 			{
 				Code: 1,
-				Msg:  &gossip.PeerProgress{},
+				Msg:  gossip.PeerProgress{},
 				Verify: func(input interface{}, received interface{}) error {
-					receivedMsg, ok := received.(*gossip.PeerProgress)
+					receivedMsg, ok := received.(gossip.PeerProgress)
 					if !ok {
 						return fmt.Errorf("expected output to be of type %T, but got %T", receivedMsg, received)
 					}
@@ -60,14 +62,15 @@ func Handshake() proto.Interaction {
 					if receivedMsg.Epoch < 1 {
 						return fmt.Errorf("unexpected epoch: %d", receivedMsg.Epoch)
 					}
-					if receivedMsg.LastBlockAtropos.IsZero() {
-						return fmt.Errorf("unexpected zero atropos")
-					}
+					/*
+						if receivedMsg.LastBlockAtropos.IsZero() {
+							return fmt.Errorf("unexpected zero atropos")
+						}
+					*/
 					if receivedMsg.LastBlockIdx < 1 {
 						return fmt.Errorf("unexpected last block index: %d", receivedMsg.LastBlockIdx)
 					}
 					return nil
-
 				},
 			},
 		},

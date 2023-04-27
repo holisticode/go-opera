@@ -31,6 +31,7 @@ type testPeer struct {
 type p2pProtocolTest interface {
 	Send(msg interface{}, code uint64) error
 	Receive() chan p2p.Msg
+	Initalized() chan struct{}
 }
 
 const (
@@ -44,24 +45,38 @@ var (
 )
 
 type defaultProtocol struct {
-	urls      []string
-	enodes    []*enode.Node
-	srv       *p2p.Server
-	peers     []*testPeer
-	receiveCh chan p2p.Msg
-	logger    *zap.Logger
+	urls         []string
+	enodes       []*enode.Node
+	srv          *p2p.Server
+	peers        []*testPeer
+	receiveCh    chan p2p.Msg
+	logger       *zap.Logger
+	protoRunning chan struct{}
 }
 
 func New(urls []string, logger *zap.Logger) (*defaultProtocol, error) {
 	enodes := make([]*enode.Node, len(urls))
 	s := &defaultProtocol{
-		enodes:    enodes,
-		peers:     []*testPeer{},
-		urls:      urls,
-		receiveCh: make(chan p2p.Msg),
-		logger:    logger,
+		enodes:       enodes,
+		peers:        []*testPeer{},
+		urls:         urls,
+		receiveCh:    make(chan p2p.Msg),
+		protoRunning: make(chan struct{}),
+		logger:       logger,
 	}
 	s.srv = s.startTestServer()
+	var err error
+	for i, u := range s.urls {
+		if strings.HasPrefix(u, "enode") {
+			s.enodes[i], err = enode.Parse(enode.ValidSchemes, u)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			//TODO: call RPC and extract enode
+		}
+		s.srv.AddPeer(s.enodes[i])
+	}
 
 	return s, nil
 }
@@ -81,6 +96,7 @@ func (s *defaultProtocol) createTestProtocol() []p2p.Protocol {
 
 func (s *defaultProtocol) run(p *p2p.Peer, rw p2p.MsgReadWriter) error {
 	s.logger.Debug("running protocol for peer", zap.String("peer", p.String()))
+	s.protoRunning <- struct{}{}
 	peer := &testPeer{p2pPeer: p, rw: rw}
 	s.peers = append(s.peers, peer)
 	for {
@@ -100,21 +116,9 @@ func (s *defaultProtocol) run(p *p2p.Peer, rw p2p.MsgReadWriter) error {
 }
 
 func (s *defaultProtocol) Send(msg interface{}, code uint64) error {
-	var err error
-	for i, u := range s.urls {
-		if strings.HasPrefix(u, "enode") {
-			s.enodes[i], err = enode.Parse(enode.ValidSchemes, u)
-			if err != nil {
-				return err
-			}
-		} else {
-			//TODO: call RPC and extract enode
-		}
-		s.srv.AddPeer(s.enodes[i])
-	}
-
+	fmt.Println(len(s.peers))
 	for _, p := range s.peers {
-		s.logger.Debug("sending message to peer", zap.String("peer", p.p2pPeer.String()))
+		s.logger.Debug("sending message to peer", zap.Uint64("code", code), zap.String("peer", p.p2pPeer.String()))
 		p2p.Send(p.rw, code, msg)
 	}
 
@@ -125,6 +129,9 @@ func (s *defaultProtocol) Receive() chan p2p.Msg {
 	return s.receiveCh
 }
 
+func (s *defaultProtocol) Initalized() chan struct{} {
+	return s.protoRunning
+}
 func (s *defaultProtocol) startTestServer() *p2p.Server {
 	logger := log.New(context.Background())
 	//logger.SetHandler(log.LvlFilterHandler(log.LvlTrace, log.StreamHandler(os.Stderr, log.TerminalFormat(true))))

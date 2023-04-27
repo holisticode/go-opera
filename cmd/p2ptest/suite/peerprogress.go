@@ -9,6 +9,7 @@ import (
 func PeerProgress() proto.Interaction {
 
 	return proto.Interaction{
+		Label: "Send PeerProgress, no response expected",
 		Input: proto.Input{
 			Msg: gossip.PeerProgress{
 				Epoch:            0,
@@ -17,12 +18,6 @@ func PeerProgress() proto.Interaction {
 			},
 			Code: gossip.ProgressMsg,
 		},
-		Output: []proto.Output{
-			{
-				Msg:  &gossip.PeerProgress{},
-				Code: gossip.ProgressMsg,
-			},
-		},
-		Label: "Send PeerProgress, expect no response",
+		Output: []proto.Output{},
 	}
 }

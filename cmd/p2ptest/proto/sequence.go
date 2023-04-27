@@ -3,9 +3,9 @@ package proto
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
-	"github.com/Fantom-foundation/go-opera/gossip"
 	"go.uber.org/zap"
 )
 
@@ -34,6 +34,7 @@ type Output struct {
 }
 
 var (
+	ErrProtocolTimeout       = errors.New("timed out waiting for protocol to be established")
 	ErrMessageCodesDontMatch = errors.New("received and expected message codes do not match")
 	ErrMessageTimeout        = errors.New("did not receive a message during the expected time")
 	ErrMessageFailedDecoding = errors.New("failed decoding of received message")
@@ -61,10 +62,18 @@ func (seq *Sequence) Run(urls []string) error {
 	if err := seq.setup(urls); err != nil {
 		return err
 	}
-	seq.logger.Debug("setup ok")
+
+	// we just ran AddPeer; wait for peer connection to be established
+	select {
+	case <-time.After(10 * time.Second):
+		return ErrProtocolTimeout
+	case <-seq.p2pLayer.Initalized():
+	}
+	seq.logger.Debug("protocol initialized; start sequence")
+
 	for i, step := range seq.Steps {
-		seq.logger.Info("running step: ", zap.String("step", step.Label))
-		seq.logger.Debug("sending", zap.Int("step", i))
+		fmt.Println()
+		seq.logger.Info("running step: ", zap.String("step", step.Label), zap.Int("step", i))
 		if err := seq.p2pLayer.Send(step.Input.Msg, step.Input.Code); err != nil {
 			seq.logger.Error("failed to send", zap.Error(err))
 			return err
@@ -72,9 +81,8 @@ func (seq *Sequence) Run(urls []string) error {
 
 		received := 0
 		msgTimeout := time.NewTimer(MaxMessageTimeout)
-		// for received < len(step.Output) {
 		loop := true
-		for loop {
+		for received < len(step.Output) && loop {
 			select {
 			case <-msgTimeout.C:
 				if received == len(step.Output) {
@@ -84,32 +92,27 @@ func (seq *Sequence) Run(urls []string) error {
 				}
 				return ErrMessageTimeout
 			case msg := <-seq.p2pLayer.Receive():
-				seq.logger.Debug("received message", zap.Uint64("code", msg.Code))
+				seq.logger.Debug("handling message", zap.Uint64("code", msg.Code))
 				if msg.Code != step.Output[received].Code {
 					return ErrMessageCodesDontMatch
 				}
 
 				//var decodedMsg = reflect.New(reflect.TypeOf(step.Output[received].Msg)).Elem().Interface()
-				var decodedMsg = step.Output[received].Msg
-				if err := msg.Decode(decodedMsg); err != nil {
+				var decodedMsg = reflect.New(reflect.TypeOf(step.Output[received].Msg))
+				if err := msg.Decode(decodedMsg.Interface()); err != nil {
 					fmt.Println(err)
 					return ErrMessageFailedDecoding
 				}
+				reflect.ValueOf(&step.Output[received].Msg).Elem().Set(decodedMsg.Elem())
 				if step.Output[received].Verify != nil {
-					if err := step.Output[received].Verify(step.Input.Msg, decodedMsg); err != nil {
+					if err := step.Output[received].Verify(step.Input.Msg, step.Output[received].Msg); err != nil {
 						return fmt.Errorf("message verification failed: %w", err)
 					}
 				}
 				seq.logger.Debug("step matched")
 				msgTimeout.Reset(MaxMessageTimeout)
-				if msg.Code == gossip.HandshakeMsg {
-					seq.p2pLayer.Send(step.Input.Msg, step.Input.Code)
-				}
 			}
 			received++
-			if received >= len(step.Output) {
-				break
-			}
 		}
 
 		seq.logger.Info("step successful")
