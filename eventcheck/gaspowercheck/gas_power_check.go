@@ -2,6 +2,7 @@ package gaspowercheck
 
 import (
 	"errors"
+	"fmt"
 	"math/big"
 	"time"
 
@@ -173,6 +174,11 @@ func (v *Checker) Validate(e inter.EventI, selfParent inter.EventI) error {
 	}
 	for i := range gasPowers.Gas {
 		if e.GasPowerLeft().Gas[i]+e.GasPowerUsed() != gasPowers.Gas[i] { // GasPowerUsed is checked in basic_check
+			fmt.Println("++++++++++++++++++++++++++++++++")
+			fmt.Println(e.GasPowerLeft().Gas[i])
+			fmt.Println(e.GasPowerUsed())
+			fmt.Println(gasPowers.Gas[i])
+			fmt.Println("++++++++++++++++++++++++++++++++")
 			return ErrWrongGasPowerLeft
 		}
 	}

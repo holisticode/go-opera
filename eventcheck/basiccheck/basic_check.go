@@ -2,6 +2,7 @@ package basiccheck
 
 import (
 	"errors"
+	"fmt"
 	"math"
 
 	base "github.com/Fantom-foundation/lachesis-base/eventcheck/basiccheck"
@@ -218,6 +219,9 @@ func (v *Checker) Validate(e inter.EventPayloadI) error {
 		return err
 	}
 	if e.GasPowerUsed() >= math.MaxInt64-1 || e.GasPowerLeft().Max() >= math.MaxInt64-1 {
+		fmt.Println("ttttttttttttttttttttttttttttttttttttttttttt")
+		fmt.Println(e.GasPowerUsed())
+		fmt.Println(e.GasPowerLeft().Max())
 		return base.ErrHugeValue
 	}
 	if e.CreationTime() <= 0 || e.MedianTime() <= 0 {

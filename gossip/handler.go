@@ -590,10 +590,12 @@ func (h *handler) makeEpProcessor(checkers *eventcheck.Checkers) *epprocessor.Pr
 
 func (h *handler) isEventInterested(id hash.Event, epoch idx.Epoch) bool {
 	if id.Epoch() != epoch {
+		fmt.Println("not interested epoch")
 		return false
 	}
 
 	if h.dagProcessor.IsBuffered(id) || h.store.HasEvent(id) {
+		fmt.Println("not interested buff")
 		return false
 	}
 	return true
@@ -902,6 +904,7 @@ func (h *handler) handleTxHashes(p *peer, announces []common.Hash) {
 	for _, id := range announces {
 		p.MarkTransaction(id)
 	}
+	fmt.Println("handle txs")
 	// Schedule all the unknown hashes for retrieval
 	requestTransactions := func(ids []interface{}) error {
 		return p.RequestTransactions(interfacesToTxids(ids))
@@ -949,6 +952,8 @@ func (h *handler) handleEvents(p *peer, events dag.Events, ordered bool) {
 	for _, e := range events {
 		p.MarkEvent(e.ID())
 	}
+	fmt.Println("*********************************xxxxxxx*******")
+	fmt.Printf("%+v\n", events)
 	// filter too high events
 	notTooHigh := make(dag.Events, 0, len(events))
 	sessionCfg := h.config.Protocol.DagStreamLeecher.Session
@@ -966,6 +971,7 @@ func (h *handler) handleEvents(p *peer, events dag.Events, ordered bool) {
 		h.dagLeecher.ForceSyncing()
 	}
 	if len(notTooHigh) == 0 {
+		fmt.Println("len not too high")
 		return
 	}
 	// Schedule all the events for connection
@@ -985,13 +991,14 @@ func (h *handler) handleMsg(p *peer) error {
 	// Read the next message from the remote peer, and ensure it's fully consumed
 	msg, err := p.rw.ReadMsg()
 	if err != nil {
+		fmt.Printf("err reading msg! %s\n", err)
 		return err
 	}
 	if msg.Size > protocolMaxMsgSize {
 		return errResp(ErrMsgTooLarge, "%v > %v", msg.Size, protocolMaxMsgSize)
 	}
 	defer msg.Discard()
-	fmt.Println(fmt.Sprintf("receive: %d", msg.Code))
+	fmt.Println(fmt.Sprintf("receive: %d from peer: %s", msg.Code, p.id))
 	// Acquire semaphore for serialized messages
 	eventsSizeEst := dag.Metric{
 		Num:  1,
@@ -1039,6 +1046,7 @@ func (h *handler) handleMsg(p *peer) error {
 	case msg.Code == NewEvmTxHashesMsg:
 		// Transactions arrived, make sure we have a valid and fresh graph to handle them
 		if !h.syncStatus.AcceptTxs() {
+			fmt.Println("not accepting txs")
 			break
 		}
 		// Transactions can be processed, parse all of them and deliver to the pool
@@ -1074,14 +1082,18 @@ func (h *handler) handleMsg(p *peer) error {
 
 	case msg.Code == EventsMsg:
 		if !h.syncStatus.AcceptEvents() {
+			fmt.Println("not syncing")
 			break
 		}
+		fmt.Println(p.id)
 
 		var events inter.EventPayloads
 		if err := msg.Decode(&events); err != nil {
 			return errResp(ErrDecode, "%v: %v", msg, err)
 		}
+		fmt.Printf("%+v\n", events)
 		if err := checkLenLimits(len(events), events); err != nil {
+			fmt.Printf("len limits! %s \n", err)
 			return err
 		}
 		_ = h.dagFetcher.NotifyReceived(eventIDsToInterfaces(events.IDs()))
@@ -1090,6 +1102,8 @@ func (h *handler) handleMsg(p *peer) error {
 	case msg.Code == NewEventIDsMsg:
 		// Fresh events arrived, make sure we have a valid and fresh graph to handle them
 		if !h.syncStatus.AcceptEvents() {
+			fmt.Println("##################################################")
+			fmt.Println("not accepting")
 			break
 		}
 		var announces hash.Events
@@ -1097,6 +1111,8 @@ func (h *handler) handleMsg(p *peer) error {
 			return errResp(ErrDecode, "%v: %v", msg, err)
 		}
 		if err := checkLenLimits(len(announces), announces); err != nil {
+			fmt.Println("######################2222########################")
+			fmt.Println("check len limits")
 			return err
 		}
 		h.handleEventHashes(p, announces)
@@ -1140,6 +1156,7 @@ func (h *handler) handleMsg(p *peer) error {
 		if request.Limit.Size > protocolMaxMsgSize*2/3 {
 			return errResp(ErrMsgTooLarge, "%v", msg)
 		}
+		fmt.Println(p.id)
 
 		pid := p.id
 		_, peerErr := h.dagSeeder.NotifyRequestReceived(dagstreamseeder.Peer{

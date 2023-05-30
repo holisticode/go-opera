@@ -2,6 +2,7 @@ package valkeystore
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path"
 
@@ -40,6 +41,7 @@ func (f *FileKeystore) Add(pubkey validatorpk.PubKey, key []byte, auth string) e
 }
 
 func (f *FileKeystore) Get(pubkey validatorpk.PubKey, auth string) (*encryption.PrivateKey, error) {
+	fmt.Println(pubkey.String())
 	if !f.Has(pubkey) {
 		return nil, ErrNotFound
 	}

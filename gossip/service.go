@@ -1,6 +1,7 @@
 package gossip
 
 import (
+	"crypto/ecdsa"
 	"errors"
 	"fmt"
 	"math/big"
@@ -9,10 +10,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Fantom-foundation/lachesis-base/abft"
 	"github.com/Fantom-foundation/lachesis-base/hash"
 	"github.com/Fantom-foundation/lachesis-base/inter/dag"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/Fantom-foundation/lachesis-base/lachesis"
+	"github.com/Fantom-foundation/lachesis-base/utils/cachescale"
 	"github.com/Fantom-foundation/lachesis-base/utils/workers"
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/common"
@@ -47,8 +50,12 @@ import (
 	"github.com/Fantom-foundation/go-opera/gossip/gasprice"
 	"github.com/Fantom-foundation/go-opera/gossip/proclogger"
 	snapsync "github.com/Fantom-foundation/go-opera/gossip/protocols/snap"
+	"github.com/Fantom-foundation/go-opera/integration/makefakegenesis"
 	"github.com/Fantom-foundation/go-opera/inter"
 	"github.com/Fantom-foundation/go-opera/logger"
+	"github.com/Fantom-foundation/go-opera/opera"
+	"github.com/Fantom-foundation/go-opera/utils"
+	"github.com/Fantom-foundation/go-opera/utils/adapters/vecmt2dagidx"
 	"github.com/Fantom-foundation/go-opera/utils/signers/gsignercache"
 	"github.com/Fantom-foundation/go-opera/utils/wgmutex"
 	"github.com/Fantom-foundation/go-opera/valkeystore"
@@ -178,6 +185,113 @@ func NewService(stack *node.Node, config Config, store *Store, blockProc BlockPr
 	svc.haltCheck = haltCheck
 
 	return svc, nil
+}
+
+type P2PTestService struct {
+	*Service
+	Signer valkeystore.SignerI
+	Store  *Store
+	Key    *ecdsa.PrivateKey
+}
+
+type gossipStoreAdapter struct {
+	*Store
+}
+
+func (g *gossipStoreAdapter) GetEvent(id hash.Event) dag.Event {
+	e := g.Store.GetEvent(id)
+	if e == nil {
+		return nil
+	}
+	return e
+}
+
+func NewP2PTestService(firstEpoch idx.Epoch, validatorsNum idx.Validator) (*P2PTestService, error) {
+	rules := opera.FakeNetRules()
+	/*
+		rules.Epochs.MaxEpochDuration = inter.Timestamp(maxEpochDuration)
+		rules.Blocks.MaxEmptyBlockSkipPeriod = 0
+	*/
+
+	var (
+		genesisBalance = uint64(1000000000)
+		genesisStake   = uint64(5000000)
+	)
+
+	genStore := makefakegenesis.FakeGenesisStoreWithRulesAndStart(validatorsNum, utils.ToFtm(genesisBalance), utils.ToFtm(genesisStake), rules, firstEpoch, 2)
+	genesis := genStore.Genesis()
+
+	store := NewMemStore()
+	_, err := store.ApplyGenesis(genesis)
+	if err != nil {
+		panic(err)
+	}
+
+	// install blockProc callbacks
+	blockProc := DefaultBlockProc()
+	//blockProc.EventsModule = testConfirmedEventsModule{blockProc.EventsModule, env}
+
+	//engine, vecClock := makeTestEngine(store)
+	cdb := abft.NewMemStore()
+	_ = cdb.ApplyGenesis(&abft.Genesis{
+		Epoch:      store.GetEpoch(),
+		Validators: store.GetValidators(),
+	})
+	vecClock := vecmt.NewIndex(func(err error) { fmt.Println(fmt.Sprintf("Vector clock error: %s", err)) }, vecmt.LiteConfig())
+	engine := abft.NewLachesis(cdb, &gossipStoreAdapter{store}, vecmt2dagidx.Wrap(vecClock), func(err error) { fmt.Println(fmt.Sprintf("Lachesis error %s", err)) }, abft.LiteConfig())
+
+	srv := &P2PTestService{
+		Store: store,
+		Key:   makefakegenesis.FakeKey(4),
+	}
+
+	// create the service
+	txPool := &dummyTxPool{}
+	srv.Service, err = newService(DefaultConfig(cachescale.Identity), store, blockProc, engine, vecClock, func(_ evmcore.StateReader) TxPool {
+		return txPool
+	})
+	if err != nil {
+		return nil, err
+	}
+	txPool.signer = srv.EthAPI.signer
+	err = engine.Bootstrap(srv.GetConsensusCallbacks())
+	if err != nil {
+		panic(err)
+	}
+
+	valKeystore := valkeystore.NewDefaultMemKeystore()
+	srv.Signer = valkeystore.NewSigner(valKeystore)
+
+	// register emitters
+	/*
+		for i := idx.Validator(0); i < validatorsNum; i++ {
+			cfg := emitter.DefaultConfig()
+			vid := store.GetValidators().GetID(i)
+			pubkey := store.GetEpochState().ValidatorProfiles[vid].PubKey
+			cfg.Validator = emitter.ValidatorConfig{
+				ID:     vid,
+				PubKey: pubkey,
+			}
+			cfg.EmitIntervals = emitter.EmitIntervals{}
+			cfg.MaxParents = idx.Event(validatorsNum/2 + 1)
+			cfg.MaxTxsPerAddress = 10000000
+			_ = valKeystore.Add(pubkey, crypto.FromECDSA(makefakegenesis.FakeKey(vid)), validatorpk.FakePassword)
+			_ = valKeystore.Unlock(pubkey, validatorpk.FakePassword)
+			world := srv.EmitterWorld(srv.Signer)
+			//world.External = testEmitterWorldExternal{world.External, env}
+			em := emitter.NewEmitter(cfg, world)
+			srv.RegisterEmitter(em)
+			//.pubkeys = append(env.pubkeys, pubkey)
+			em.Start()
+		}
+	*/
+
+	MakeProtocols(srv.Service, srv.handler, srv.operaDialCandidates)
+	_ = srv.store.GenerateSnapshotAt(common.Hash(store.GetBlockState().FinalizedStateRoot), false)
+	srv.blockProcTasks.Start(1)
+	srv.verWatcher.Start()
+
+	return srv, nil
 }
 
 func newService(config Config, store *Store, blockProc BlockProc, engine lachesis.Consensus, dagIndexer *vecmt.Index, newTxPool func(evmcore.StateReader) TxPool) (*Service, error) {
@@ -339,6 +453,10 @@ func (s *Service) EmitterWorld(signer valkeystore.SignerI) emitter.World {
 		Signer:   signer,
 		TxSigner: s.EthAPI.signer,
 	}
+}
+
+func (s *Service) GetP2PServer() *p2p.Server {
+	return s.p2pServer
 }
 
 // RegisterEmitter must be called before service is started

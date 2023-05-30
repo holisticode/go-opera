@@ -2,6 +2,7 @@ package valkeystore
 
 import (
 	"crypto/ecdsa"
+	"fmt"
 
 	"github.com/ethereum/go-ethereum/crypto"
 
@@ -24,6 +25,7 @@ func NewSigner(backend KeystoreI) *Signer {
 }
 
 func (s *Signer) Sign(pubkey validatorpk.PubKey, digest []byte) ([]byte, error) {
+	fmt.Println(pubkey.Type)
 	if pubkey.Type != validatorpk.Types.Secp256k1 {
 		return nil, encryption.ErrNotSupportedType
 	}

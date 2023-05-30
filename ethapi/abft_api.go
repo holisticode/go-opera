@@ -5,6 +5,7 @@ import (
 
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
@@ -63,6 +64,28 @@ func (s *PublicAbftAPI) GetEpochUptime(ctx context.Context, validatorID hexutil.
 		return 0, nil
 	}
 	return hexutil.Uint64(v.Uint64()), nil
+}
+
+func (s *PublicAbftAPI) GetEpochBlockState(ctx context.Context, epoch hexutil.Uint) (map[string]interface{}, error) {
+	ep := rpc.BlockNumber(epoch)
+	_, es, err := s.b.GetEpochBlockState(ctx, ep)
+	if err != nil {
+		return nil, err
+	}
+	bytes, err := rlp.EncodeToBytes(es)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		/*
+			"epoch" : hexutil.Uint64(es.Epoch),
+			"esstart": hexutil.Uint64(es.EpochStart),
+			"prevstart": hexutil.Uint64(es.PrevEpochStart),
+			"stateroot" : hexutil.Bytes(es.EpochStateRoot[:]),
+			"rules":   hexutil.Uint64(es.Rules),
+		*/
+		"rlp_encoded": hexutil.Bytes(bytes),
+	}, nil
 }
 
 // GetOriginatedEpochFee returns validator's originated epoch fee.

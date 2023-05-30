@@ -208,6 +208,7 @@ func memSize(v rlp.RawValue) dag.Metric {
 }
 
 func (p *peer) asyncSendEncodedItem(raw rlp.RawValue, code uint64, queue chan broadcastItem) bool {
+	fmt.Println(raw)
 	if !p.queuedDataSemaphore.TryAcquire(memSize(raw)) {
 		return false
 	}
@@ -377,6 +378,7 @@ func (p *peer) SendEventsRLP(events []rlp.RawValue, ids []hash.Event) error {
 // AsyncSendEvents queues an entire event for propagation to a remote peer.
 // If the peer's broadcast queue is full, the events are silently dropped.
 func (p *peer) AsyncSendEvents(events inter.EventPayloads, queue chan broadcastItem) bool {
+	fmt.Printf("----------------------------------3------------------+++++%+v\n", events)
 	if p.asyncSendNonEncodedItem(events, EventsMsg, queue) {
 		// Mark all the event hash as known, but ensure we don't overflow our limits
 		for _, event := range events {
