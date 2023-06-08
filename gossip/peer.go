@@ -26,11 +26,15 @@ import (
 )
 
 var (
-	errNotRegistered = errors.New("peer is not registered")
+	errNotRegistered   = errors.New("peer is not registered")
+	errTooManyRequests = errors.New("too many same requests per second from the same peer")
 )
 
 const (
 	handshakeTimeout = 5 * time.Second
+
+	sameMsgDisconnectThreshold = 10
+	maxMsgFrequency            = 300 * time.Microsecond
 )
 
 // PeerInfo represents a short summary of the sub-protocol metadata known
@@ -44,6 +48,11 @@ type PeerInfo struct {
 type broadcastItem struct {
 	Code uint64
 	Raw  rlp.RawValue
+}
+
+type msgDOSwatch struct {
+	timestamp []time.Time
+	count     int
 }
 
 type peer struct {
@@ -69,6 +78,8 @@ type peer struct {
 	snapWait chan struct{} // Notification channel for snap connections
 
 	useless uint32
+
+	msgTracker map[uint64]map[string]*msgDOSwatch
 
 	sync.RWMutex
 }
@@ -119,11 +130,40 @@ func newPeer(version uint, p *p2p.Peer, rw p2p.MsgReadWriter, cfg PeerCacheConfi
 		queue:               make(chan broadcastItem, cfg.MaxQueuedItems),
 		queuedDataSemaphore: datasemaphore.New(dag.Metric{cfg.MaxQueuedItems, cfg.MaxQueuedSize}, getSemaphoreWarningFn("Peers queue")),
 		term:                make(chan struct{}),
+		msgTracker:          make(map[uint64]map[string]*msgDOSwatch),
 	}
 
 	go peer.broadcast(peer.queue)
 
+	go peer.collectMsgTrackerGarbage()
+
 	return peer
+}
+
+// With the msgTracker approach, every single message received for that code will be saved.
+// Therefore we need to periodically do some cleanup in order to remove stale messages
+func (p *peer) collectMsgTrackerGarbage() {
+	// loop forever
+	for {
+		select {
+		// every minute:
+		case <-time.After(1 * time.Minute):
+			// iterate the tracker
+			for _, codeMap := range p.msgTracker {
+				// for each message...
+				for id, watch := range codeMap {
+					// check the last timestamp.
+					// if it is older than the actual allowed frequency, we can
+					// delete the whole entry
+					if time.Now().Sub(watch.timestamp[len(watch.timestamp)-1]) > maxMsgFrequency {
+						delete(codeMap, id)
+					}
+				}
+			}
+		case <-p.term:
+			return
+		}
+	}
 }
 
 // broadcast is a write loop that multiplexes event propagations, announcements
@@ -555,6 +595,46 @@ func (p *peer) readStatus(network uint64, handshake *handshakeData, genesis comm
 	if uint(handshake.ProtocolVersion) != p.version {
 		return errResp(ErrProtocolVersionMismatch, "%d (!= %d)", handshake.ProtocolVersion, p.version)
 	}
+	return nil
+}
+
+// preventDOSMsgFlood tracks messages per peer per code.
+// It saves each message up to sameMsgDisconnectThreshold,
+// with the RLP representation as its "hash".
+// If the threshold is reached, and it detects that there have been too many messages
+// per time duration `maxMsgFrequency`, it disconnects the peer
+func (p *peer) preventDOSMsgFlood(msg p2p.Msg) error {
+	// make an entry for this message type
+	if p.msgTracker[msg.Code] == nil {
+		p.msgTracker[msg.Code] = make(map[string]*msgDOSwatch)
+	}
+
+	// create a "hash" for the map
+	raw, err := rlp.EncodeToBytes(msg)
+	if err != nil {
+
+	}
+	id := string(raw)
+
+	// check if there already is a map for this message
+	dosWatch := p.msgTracker[msg.Code][id]
+	if dosWatch == nil {
+		dosWatch = new(msgDOSwatch)
+		p.msgTracker[msg.Code][id] = dosWatch
+	}
+
+	// check if the timestamp is ok
+	dosWatch.timestamp = append(dosWatch.timestamp, time.Now())
+	// we reached the threshold
+	if len(dosWatch.timestamp) > sameMsgDisconnectThreshold {
+		// the oldest timestamp is within the maxMsgFrequency?
+		if time.Now().Sub(dosWatch.timestamp[0]) > maxMsgFrequency {
+			return errTooManyRequests
+		}
+		// reset the timestamp array
+		dosWatch.timestamp = dosWatch.timestamp[:0]
+	}
+
 	return nil
 }
 
