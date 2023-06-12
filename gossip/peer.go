@@ -1,6 +1,7 @@
 package gossip
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"sync"
@@ -609,12 +610,15 @@ func (p *peer) preventDOSMsgFlood(msg p2p.Msg) error {
 		p.msgTracker[msg.Code] = make(map[string]*msgDOSwatch)
 	}
 
-	// create a "hash" for the map
+	// create a "hash" for the map: we need its byte representation
 	raw, err := rlp.EncodeToBytes(msg)
 	if err != nil {
 
 	}
-	id := string(raw)
+	// calc a hash of the msg, so we don't need to store the complete msg
+	h := sha256.New()
+	h.Write(raw)
+	id := string(h.Sum(nil))
 
 	// check if there already is a map for this message
 	dosWatch := p.msgTracker[msg.Code][id]
