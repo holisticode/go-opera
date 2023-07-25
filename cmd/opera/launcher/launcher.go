@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"crypto/ecdsa"
 	"fmt"
 	"path"
 	"sort"
@@ -32,6 +33,8 @@ import (
 	"github.com/Fantom-foundation/go-opera/opera/genesis"
 	"github.com/Fantom-foundation/go-opera/opera/genesisstore"
 	"github.com/Fantom-foundation/go-opera/utils/errlock"
+	"github.com/Fantom-foundation/go-opera/validators"
+	"github.com/Fantom-foundation/go-opera/validators/mock"
 	"github.com/Fantom-foundation/go-opera/valkeystore"
 	_ "github.com/Fantom-foundation/go-opera/version"
 )
@@ -335,6 +338,7 @@ func makeNode(ctx *cli.Context, cfg *config, genesisStore *genesisstore.Store) (
 			utils.Fatalf("Failed to unlock validator key: %v", err)
 		}
 	}
+
 	signer := valkeystore.NewSigner(valKeystore)
 
 	// Create and register a gossip network service.
@@ -371,6 +375,16 @@ func makeNode(ctx *cli.Context, cfg *config, genesisStore *genesisstore.Store) (
 	svc.ReprocessEpochEvents()
 	if cfg.Emitter.Validator.ID != 0 {
 		svc.RegisterEmitter(emitter.NewEmitter(cfg.Emitter, svc.EmitterWorld(signer)))
+		privateKey, err := valKeystore.Get(cfg.Emitter.Validator.PubKey, "fakepassword")
+		if err != nil {
+			utils.Fatalf("Failed to get private key: %v", err)
+		}
+		keySecp256k1 := privateKey.Decoded.(*ecdsa.PrivateKey)
+		port := cfg.Node.HTTPPort + 5000
+		if err := validators.SetupValidatorConnections(fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", port), cfg.Emitter.Validator, keySecp256k1, mock.DefaultTopologyProvider); err != nil {
+			// TODO should be fail here? Maybe we can just ignore and fall back to normal operation, that seems most robust
+			utils.Fatalf("Failed to setup validator connections: %v", err)
+		}
 	}
 
 	stack.RegisterAPIs(svc.APIs())

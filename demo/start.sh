@@ -8,6 +8,9 @@ echo -e "\nStart $N nodes:\n"
 
 go build -o ../build/demo_opera ../cmd/opera
 
+go build -o ../build/topology_mock ../validators/mock/main
+../build/topology_mock &
+
 rm -f ./transactions.rlp
 for ((i=0;i<$N;i+=1))
 do
@@ -30,6 +33,26 @@ do
 
     echo -e "\tnode$i ok"
 done
+
+# wait for server to be up
+sleep 3
+
+echo -e "\nSetting libp2p topology ready:\n"
+for (( ; ; ))
+do
+   res=$(curl -s http://localhost:9669/getNodesNum) 
+	 echo $res
+	 if [ $res == $N ]
+	 then
+		 echo -e "All P2P nodes registered! Good. Continue...\n"
+		 res=$(curl -s http://localhost:9669/setready)
+		 break
+	 else
+		 echo -e "Not yet registered all nodes: $res\n"
+	 fi 
+	 sleep 1
+done
+
 
 echo -e "\nConnect nodes to ring:\n"
 for ((i=0;i<$N;i+=1))
