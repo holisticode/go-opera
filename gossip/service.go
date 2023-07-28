@@ -52,6 +52,7 @@ import (
 	"github.com/Fantom-foundation/go-opera/utils/signers/gsignercache"
 	"github.com/Fantom-foundation/go-opera/utils/txtime"
 	"github.com/Fantom-foundation/go-opera/utils/wgmutex"
+	"github.com/Fantom-foundation/go-opera/validators/service"
 	"github.com/Fantom-foundation/go-opera/valkeystore"
 	"github.com/Fantom-foundation/go-opera/vecmt"
 )
@@ -342,6 +343,22 @@ func (s *Service) EmitterWorld(signer valkeystore.SignerI) emitter.World {
 		Signer:   signer,
 		TxSigner: s.EthAPI.signer,
 	}
+}
+
+func (s *Service) RegisterValidatorService(svc service.Validator) {
+	s.handler.validatorService = svc
+}
+
+func (s *Service) HandleValidatorTxs(txs types.Transactions) {
+	fmt.Println("*********************************** 1 *****************************")
+	s.Log.Debug("handling direct transactions from validator")
+	s.handler.handleTxsMsg(txs, nil)
+}
+
+func (s *Service) HandleValidatorEvents(events inter.EventPayloads) {
+	fmt.Println("*********************************** 2 *****************************")
+	s.Log.Debug("handling direct event from validator")
+	s.handler.handleEventsMsg(events, nil)
 }
 
 // RegisterEmitter must be called before service is started

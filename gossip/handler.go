@@ -1,6 +1,7 @@
 package gossip
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -52,6 +53,7 @@ import (
 	"github.com/Fantom-foundation/go-opera/inter/ier"
 	"github.com/Fantom-foundation/go-opera/logger"
 	"github.com/Fantom-foundation/go-opera/utils/txtime"
+	"github.com/Fantom-foundation/go-opera/validators/service"
 )
 
 const (
@@ -192,6 +194,8 @@ type handler struct {
 	started sync.WaitGroup
 
 	logger.Instance
+
+	validatorService service.Validator
 }
 
 // newHandler returns a new Fantom sub protocol manager. The Fantom sub protocol manages peers capable
@@ -914,11 +918,13 @@ func (h *handler) handleTxHashes(p *peer, announces []common.Hash) {
 
 func (h *handler) handleTxs(p *peer, txs types.Transactions) {
 	// Mark the hashes as present at the remote node
-	now := time.Now()
-	for _, tx := range txs {
-		txid := tx.Hash()
-		txtime.Saw(txid, now)
-		p.MarkTransaction(txid)
+	if p != nil {
+		now := time.Now()
+		for _, tx := range txs {
+			txid := tx.Hash()
+			txtime.Saw(txid, now)
+			p.MarkTransaction(txid)
+		}
 	}
 	h.txpool.AddRemotes(txs)
 }
@@ -953,11 +959,13 @@ func (h *handler) handleEventHashes(p *peer, announces hash.Events) {
 func (h *handler) handleEvents(p *peer, events dag.Events, ordered bool) {
 	// Mark the hashes as present at the remote node
 	now := time.Now()
-	for _, e := range events {
-		for _, tx := range e.(inter.EventPayloadI).Txs() {
-			txtime.Saw(tx.Hash(), now)
+	if p != nil {
+		for _, e := range events {
+			for _, tx := range e.(inter.EventPayloadI).Txs() {
+				txtime.Saw(tx.Hash(), now)
+			}
+			p.MarkEvent(e.ID())
 		}
-		p.MarkEvent(e.ID())
 	}
 	// filter too high events
 	notTooHigh := make(dag.Events, 0, len(events))
@@ -978,14 +986,17 @@ func (h *handler) handleEvents(p *peer, events dag.Events, ordered bool) {
 		return
 	}
 	// Schedule all the events for connection
-	peer := *p
-	requestEvents := func(ids []interface{}) error {
-		return peer.RequestEvents(interfacesToEventIDs(ids))
+	// TODO why do we need this? Didn't we just get the events? Why schedule to resend again the IDs?
+	if p != nil {
+		peer := *p
+		requestEvents := func(ids []interface{}) error {
+			return peer.RequestEvents(interfacesToEventIDs(ids))
+		}
+		notifyAnnounces := func(ids hash.Events) {
+			_ = h.dagFetcher.NotifyAnnounces(peer.id, eventIDsToInterfaces(ids), now, requestEvents)
+		}
+		_ = h.dagProcessor.Enqueue(peer.id, notTooHigh, ordered, notifyAnnounces, nil)
 	}
-	notifyAnnounces := func(ids hash.Events) {
-		_ = h.dagFetcher.NotifyAnnounces(peer.id, eventIDsToInterfaces(ids), now, requestEvents)
-	}
-	_ = h.dagProcessor.Enqueue(peer.id, notTooHigh, ordered, notifyAnnounces, nil)
 }
 
 // handleMsg is invoked whenever an inbound message is received from a remote
@@ -1034,15 +1045,10 @@ func (h *handler) handleMsg(p *peer) error {
 		if err := msg.Decode(&txs); err != nil {
 			return errResp(ErrDecode, "msg %v: %v", msg, err)
 		}
-		if err := checkLenLimits(len(txs), txs); err != nil {
+
+		if err := h.handleTxsMsg(txs, p); err != nil {
 			return err
 		}
-		txids := make([]interface{}, txs.Len())
-		for i, tx := range txs {
-			txids[i] = tx.Hash()
-		}
-		_ = h.txFetcher.NotifyReceived(txids)
-		h.handleTxs(p, txs)
 
 	case msg.Code == NewEvmTxHashesMsg:
 		// Transactions arrived, make sure we have a valid and fresh graph to handle them
@@ -1089,11 +1095,10 @@ func (h *handler) handleMsg(p *peer) error {
 		if err := msg.Decode(&events); err != nil {
 			return errResp(ErrDecode, "%v: %v", msg, err)
 		}
-		if err := checkLenLimits(len(events), events); err != nil {
+
+		if err := h.handleEventsMsg(events, p); err != nil {
 			return err
 		}
-		_ = h.dagFetcher.NotifyReceived(eventIDsToInterfaces(events.IDs()))
-		h.handleEvents(p, events.Bases(), events.Len() > 1)
 
 	case msg.Code == NewEventIDsMsg:
 		// Fresh events arrived, make sure we have a valid and fresh graph to handle them
@@ -1325,6 +1330,35 @@ func (h *handler) handleMsg(p *peer) error {
 	default:
 		return errResp(ErrInvalidMsgCode, "%v", msg.Code)
 	}
+	return nil
+}
+
+func (h *handler) handleTxsMsg(txs types.Transactions, p *peer) error {
+	if err := checkLenLimits(len(txs), txs); err != nil {
+		return err
+	}
+	txids := make([]interface{}, txs.Len())
+	for i, tx := range txs {
+		txids[i] = tx.Hash()
+	}
+	_ = h.txFetcher.NotifyReceived(txids)
+	h.handleTxs(p, txs)
+	// only forwarding full events; NewEvmTxHashes are not forwarded as they first need to be
+	// requested from the peer - TODO: correct?
+	h.validatorService.ForwardTxs(context.Background(), txs)
+	return nil
+}
+
+func (h *handler) handleEventsMsg(events inter.EventPayloads, p *peer) error {
+	if err := checkLenLimits(len(events), events); err != nil {
+		return err
+	}
+	_ = h.dagFetcher.NotifyReceived(eventIDsToInterfaces(events.IDs()))
+	h.handleEvents(p, events.Bases(), events.Len() > 1)
+	// only forwarding full events; NewEventIDs are not forwarded as they first need to be
+	// requested from the peer - TODO: correct?
+	// TODO: Could this result in endless event propagation? Maybe not if the topology limits that
+	h.validatorService.ForwardEvents(context.Background(), events)
 	return nil
 }
 

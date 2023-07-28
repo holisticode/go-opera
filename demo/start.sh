@@ -29,7 +29,7 @@ do
 	--http --http.addr="127.0.0.1" --http.port=${RPCP} --http.corsdomain="*" --http.api="eth,debug,net,admin,web3,personal,txpool,ftm,dag" \
 	--ws --ws.addr="127.0.0.1" --ws.port=${WSP} --ws.origins="*" --ws.api="eth,debug,net,admin,web3,personal,txpool,ftm,dag" \
 	--metrics --metrics.addr=127.0.0.1 --metrics.port=$(($RPCP+1100)) \
-	--verbosity=3 --tracing >> opera$i.log 2>&1)&
+	--verbosity=5 --tracing >> opera$i.log 2>&1)&
 
     echo -e "\tnode$i ok"
 done
@@ -41,14 +41,13 @@ echo -e "\nSetting libp2p topology ready:\n"
 for (( ; ; ))
 do
    res=$(curl -s http://localhost:9669/getNodesNum) 
-	 echo $res
 	 if [ $res == $N ]
 	 then
 		 echo -e "All P2P nodes registered! Good. Continue...\n"
 		 res=$(curl -s http://localhost:9669/setready)
 		 break
 	 else
-		 echo -e "Not yet registered all nodes: $res\n"
+		 echo "Not all nodes registered yet: $res"
 	 fi 
 	 sleep 1
 done

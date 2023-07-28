@@ -1,7 +1,6 @@
 package launcher
 
 import (
-	"crypto/ecdsa"
 	"fmt"
 	"path"
 	"sort"
@@ -62,6 +61,8 @@ var (
 	legacyRpcFlags   []cli.Flag
 	rpcFlags         []cli.Flag
 	metricsFlags     []cli.Flag
+
+	defaultTopologyProvider = mock.NewMockTopologyProvider()
 )
 
 func initFlags() {
@@ -375,16 +376,8 @@ func makeNode(ctx *cli.Context, cfg *config, genesisStore *genesisstore.Store) (
 	svc.ReprocessEpochEvents()
 	if cfg.Emitter.Validator.ID != 0 {
 		svc.RegisterEmitter(emitter.NewEmitter(cfg.Emitter, svc.EmitterWorld(signer)))
-		privateKey, err := valKeystore.Get(cfg.Emitter.Validator.PubKey, "fakepassword")
-		if err != nil {
-			utils.Fatalf("Failed to get private key: %v", err)
-		}
-		keySecp256k1 := privateKey.Decoded.(*ecdsa.PrivateKey)
-		port := cfg.Node.HTTPPort + 5000
-		if err := validators.SetupValidatorConnections(fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", port), cfg.Emitter.Validator, keySecp256k1, mock.DefaultTopologyProvider); err != nil {
-			// TODO should be fail here? Maybe we can just ignore and fall back to normal operation, that seems most robust
-			utils.Fatalf("Failed to setup validator connections: %v", err)
-		}
+		// setup libp2p and connections
+		go setupValidatorConns(cfg, valKeystore, svc)
 	}
 
 	stack.RegisterAPIs(svc.APIs())
@@ -399,6 +392,22 @@ func makeNode(ctx *cli.Context, cfg *config, genesisStore *genesisstore.Store) (
 			_ = closeDBs()
 		}
 	}
+}
+
+func setupValidatorConns(cfg *config, valKeystore *valkeystore.SyncedKeystore, gossipSvc *gossip.Service) {
+	privateKey, err := valKeystore.Get(cfg.Emitter.Validator.PubKey, "fakepassword")
+	if err != nil {
+		utils.Fatalf("Failed to get private key: %v", err)
+	}
+	// TODO port
+	port := cfg.Node.HTTPPort + 5000
+	// TODO ip and protocol
+	svc, err := validators.SetupValidatorConnections(fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", port), cfg.Emitter.Validator, privateKey, defaultTopologyProvider, gossipSvc)
+	if err != nil {
+		// TODO should be fail here? Maybe we can just ignore and fall back to normal operation, that seems most robust
+		utils.Fatalf("Failed to setup validator connections: %v", err)
+	}
+	gossipSvc.RegisterValidatorService(svc)
 }
 
 func makeConfigNode(ctx *cli.Context, cfg *node.Config) *node.Node {

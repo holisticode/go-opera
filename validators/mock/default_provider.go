@@ -9,15 +9,50 @@ import (
 	"time"
 
 	"github.com/Fantom-foundation/go-opera/validators"
+	"github.com/Fantom-foundation/lachesis-base/inter/idx"
+	"github.com/ethereum/go-ethereum/log"
+	"github.com/libp2p/go-libp2p/core/peer"
 )
 
 const (
+	// TODO configurable?
 	defaultPort = 9669
 )
 
-var DefaultTopologyProvider = MockTopologyProvider
+var (
+	_ validators.TopologyProvider = &mockTopologyProvider{}
+)
 
-func MockTopologyProvider() (*validators.Topology, error) {
+type mockTopologyProvider struct {
+}
+
+func NewMockTopologyProvider() validators.TopologyProvider {
+	return &mockTopologyProvider{}
+}
+
+func (p *mockTopologyProvider) RegisterValidator(id idx.ValidatorID, libp2pID peer.ID, listenAddr string) error {
+	resp, err := http.Get(fmt.Sprintf("http://localhost:%d/setListenAddrForValidator?id=%d&listen-addr=%s/ipfs/%s",
+		defaultPort,
+		id,
+		listenAddr,
+		libp2pID.String()))
+	if err != nil {
+		return err
+	}
+	res, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusCreated {
+		return fmt.Errorf("expected status code %d when setting id on topology, but got %d: %s",
+			http.StatusCreated,
+			resp.StatusCode,
+			string(res))
+	}
+	return nil
+}
+
+func (p *mockTopologyProvider) GetTopology() (*validators.Topology, error) {
 	timeout := time.NewTimer(20 * time.Second)
 	ticker := time.NewTicker(1 * time.Second)
 	loop := true
@@ -28,11 +63,11 @@ func MockTopologyProvider() (*validators.Topology, error) {
 		case <-ticker.C:
 			readyResp, err := http.Get(fmt.Sprintf("http://localhost:%d/ready", defaultPort))
 			if err != nil {
-				fmt.Println(fmt.Sprintf("error requesting ready state from mock server: %s", err))
+				log.Warn("error requesting ready state from mock server: %s", err)
 				continue
 			}
 			if readyResp.StatusCode != http.StatusOK {
-				fmt.Println("requesting ready state from mock server returned NOT ready")
+				log.Debug("requesting ready state from mock server returned NOT ready")
 			} else {
 				loop = false
 			}

@@ -5,15 +5,18 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"sync"
 
 	"github.com/Fantom-foundation/go-opera/validators"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
+	"github.com/ethereum/go-ethereum/log"
 )
 
 type MockTopologyServer struct {
 	topology validators.Topology
 	port     int
 	isReady  bool
+	lock     sync.Mutex
 }
 
 func NewMockTopologyServer() {
@@ -40,7 +43,7 @@ func NewMockTopologyServer() {
 }
 
 func (s *MockTopologyServer) start() error {
-	fmt.Println("starting mock topology server...")
+	log.Debug("starting mock topology server...")
 	if err := http.ListenAndServe(fmt.Sprintf(":%d", s.port), nil); err != nil {
 		return err
 	}
@@ -53,6 +56,9 @@ func writeErr(w http.ResponseWriter, errString string) {
 }
 
 func (s *MockTopologyServer) getTopology(w http.ResponseWriter, req *http.Request) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
 	asBytes, err := json.Marshal(s.topology)
 	if err != nil {
 		writeErr(w, "failed to convert topology to JSON")
@@ -64,6 +70,9 @@ func (s *MockTopologyServer) getTopology(w http.ResponseWriter, req *http.Reques
 }
 
 func (s *MockTopologyServer) getNodesNum(w http.ResponseWriter, req *http.Request) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
 	num := len(s.topology.ListenAddr)
 
 	w.WriteHeader(http.StatusOK)
@@ -71,6 +80,9 @@ func (s *MockTopologyServer) getNodesNum(w http.ResponseWriter, req *http.Reques
 }
 
 func (s *MockTopologyServer) getValidatorsForID(w http.ResponseWriter, req *http.Request) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
 	if !req.URL.Query().Has("id") {
 		writeErr(w, "this endpoint requires an 'id' query string param")
 		return
@@ -102,6 +114,9 @@ func (s *MockTopologyServer) getValidatorsForID(w http.ResponseWriter, req *http
 }
 
 func (s *MockTopologyServer) setListenAddrForValidator(w http.ResponseWriter, req *http.Request) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
 	if !req.URL.Query().Has("id") {
 		writeErr(w, "this endpoint requires an 'id' query string param")
 		return
@@ -118,17 +133,22 @@ func (s *MockTopologyServer) setListenAddrForValidator(w http.ResponseWriter, re
 		writeErr(w, "id invalid")
 		return
 	}
-	valid := idx.ValidatorID(id)
-	s.topology.ListenAddr[valid] = qaddr
+	valID := idx.ValidatorID(id)
+	s.topology.ListenAddr[valID] = qaddr
 	for v := range s.topology.ListenAddr {
-		if v == valid {
+		if v == valID {
 			continue
 		}
-		val := &validators.Validator{
-			ID:         valid,
+		oneway := &validators.Validator{
+			ID:         valID,
 			ListenAddr: qaddr,
 		}
-		s.topology.Connections[v] = append(s.topology.Connections[v], val)
+		reverse := &validators.Validator{
+			ID:         v,
+			ListenAddr: s.topology.ListenAddr[v],
+		}
+		s.topology.Connections[v] = append(s.topology.Connections[v], oneway)
+		s.topology.Connections[valID] = append(s.topology.Connections[valID], reverse)
 
 	}
 	w.WriteHeader(http.StatusCreated)
@@ -136,6 +156,9 @@ func (s *MockTopologyServer) setListenAddrForValidator(w http.ResponseWriter, re
 }
 
 func (s *MockTopologyServer) getListenAddrForValidator(w http.ResponseWriter, req *http.Request) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
 	if !req.URL.Query().Has("id") {
 		writeErr(w, "this endpoint requires an 'id' query string param")
 		return

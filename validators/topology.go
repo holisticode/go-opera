@@ -1,18 +1,29 @@
 package validators
 
 import (
+	"context"
 	"crypto/ecdsa"
+	"errors"
 	"fmt"
-	"io"
-	"net/http"
+	"time"
 
+	"github.com/Fantom-foundation/go-opera/gossip"
 	"github.com/Fantom-foundation/go-opera/gossip/emitter"
+	"github.com/Fantom-foundation/go-opera/validators/service"
+	"github.com/Fantom-foundation/go-opera/valkeystore/encryption"
 	"github.com/Fantom-foundation/lachesis-base/inter/idx"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/libp2p/go-libp2p"
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
-type TopologyProvider func() (*Topology, error)
+type TopologyProvider interface {
+	// RegisterValidator probably is not necessary in production,
+	// but is useful in demo mode so we can register as many validators as requested
+	RegisterValidator(idx.ValidatorID, peer.ID, string) error
+	GetTopology() (*Topology, error)
+}
 
 type Topology struct {
 	ListenAddr  map[idx.ValidatorID]string
@@ -26,71 +37,55 @@ type Validator struct {
 	City       string
 }
 
-func SetupValidatorConnections(listenAddr string, cfg emitter.ValidatorConfig, key *ecdsa.PrivateKey, getTopology TopologyProvider) error {
-
-	fmt.Println("creating libp2p node...")
-	/*
-		libp2pPrvKey, _, err := crypto.ECDSAKeyPairFromKey(key)
-		if err != nil {
-			return fmt.Errorf("failed to create a libp2p crypto key from the ecdsa key: %w", err)
-		}
-	*/
+func SetupValidatorConnections(
+	listenAddr string,
+	cfg emitter.ValidatorConfig,
+	key *encryption.PrivateKey,
+	topologyProvider TopologyProvider,
+	gossipSvc *gossip.Service) (service.Validator, error) {
+	log.Debug("creating libp2p node...")
+	libp2pPrvKey, err := crypto.UnmarshalSecp256k1PrivateKey(key.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create a libp2p crypto key from the ecdsa key: %w", err)
+	}
 	libp2pNode, err := libp2p.New(
 		libp2p.ListenAddrStrings(listenAddr),
-	//	libp2p.Identity(libp2pPrvKey),
+		libp2p.Identity(libp2pPrvKey),
 	)
 	if err != nil {
-		return fmt.Errorf("failed to create libp2p node: %w", err)
+		return nil, fmt.Errorf("failed to create libp2p node: %w", err)
 	}
 	thisID := libp2pNode.ID()
-	fmt.Println(thisID)
-	//topology.ListenAddr[cfg.ID] = fmt.Sprintf("%s/%s", topology.ListenAddr[cfg.ID], thisID)
-	if err := setTopology(cfg.ID, thisID, listenAddr); err != nil {
-		return err
+
+	if err := topologyProvider.RegisterValidator(cfg.ID, thisID, listenAddr); err != nil {
+		return nil, err
 	}
 
-	topology, err := getTopology()
+	topology, err := topologyProvider.GetTopology()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	fmt.Println(topology)
 
 	if topology.ListenAddr[cfg.ID] != fmt.Sprintf("%s/ipfs/%s", listenAddr, thisID.String()) {
-		return fmt.Errorf("topology provider lists this node's ListenAddr to be %s, but got %s. Can't proceed!", topology.ListenAddr[cfg.ID], listenAddr)
+		return nil, fmt.Errorf("topology provider lists this node's ListenAddr to be %s, but got %s. Can't proceed!", topology.ListenAddr[cfg.ID], listenAddr)
 	}
 
-	fmt.Println("creating validator service...")
-	svc := NewValidatorService(libp2pNode, key)
+	log.Debug("creating validator service...")
+	svc := NewService(libp2pNode, libp2pPrvKey, gossipSvc)
 
 	myconns := topology.Connections[cfg.ID]
+	if len(myconns) == 0 {
+		return nil, errors.New("no validator connections!")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 	for _, conn := range myconns {
-		fmt.Println("connecting to validator...")
-		if err := svc.ConnectToValidator(conn); err != nil {
-			return err
+		log.Debug("connecting to validator...")
+		if err := svc.ConnectToValidator(ctx, conn); err != nil {
+			return nil, err
 		}
 	}
-	fmt.Println("connected to all peers successfully")
+	log.Info("connected to all libp2p validators successfully")
 
-	return nil
-}
-
-func setTopology(validator idx.ValidatorID, id peer.ID, listenAddr string) error {
-	resp, err := http.Get(fmt.Sprintf("http://localhost:9669/setListenAddrForValidator?id=%d&listen-addr=%s/ipfs/%s",
-		validator,
-		listenAddr,
-		id.String()))
-	if err != nil {
-		return err
-	}
-	res, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode != http.StatusCreated {
-		return fmt.Errorf("expected status code %d when setting id on topology, but got %d: %s",
-			http.StatusCreated,
-			resp.StatusCode,
-			string(res))
-	}
-	return nil
+	return svc, nil
 }
