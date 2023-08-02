@@ -1149,6 +1149,10 @@ func (h *handler) handleMsg(p *peer) error {
 			return errResp(ErrMsgTooLarge, "%v", msg)
 		}
 
+		if err := p.preventDOSMsgFlood(msg); err != nil {
+			return err
+		}
+
 		pid := p.id
 		_, peerErr := h.dagSeeder.NotifyRequestReceived(dagstreamseeder.Peer{
 			ID:        pid,
@@ -1177,6 +1181,7 @@ func (h *handler) handleMsg(p *peer) error {
 		if (len(chunk.Events) != 0) && (len(chunk.IDs) != 0) {
 			return errors.New("expected either events or event hashes")
 		}
+
 		var last hash.Event
 		if len(chunk.IDs) != 0 {
 			h.handleEventHashes(p, chunk.IDs)
@@ -1199,6 +1204,10 @@ func (h *handler) handleMsg(p *peer) error {
 		}
 		if request.Limit.Size > protocolMaxMsgSize*2/3 {
 			return errResp(ErrMsgTooLarge, "%v", msg)
+		}
+
+		if err := p.preventDOSMsgFlood(msg); err != nil {
+			return err
 		}
 
 		pid := p.id
@@ -1246,6 +1255,10 @@ func (h *handler) handleMsg(p *peer) error {
 			return errResp(ErrMsgTooLarge, "%v", msg)
 		}
 
+		if err := p.preventDOSMsgFlood(msg); err != nil {
+			return err
+		}
+
 		pid := p.id
 		_, peerErr := h.brSeeder.NotifyRequestReceived(brstreamseeder.Peer{
 			ID:        pid,
@@ -1290,6 +1303,10 @@ func (h *handler) handleMsg(p *peer) error {
 		}
 		if request.Limit.Size > protocolMaxMsgSize*2/3 {
 			return errResp(ErrMsgTooLarge, "%v", msg)
+		}
+
+		if err := p.preventDOSMsgFlood(msg); err != nil {
+			return err
 		}
 
 		pid := p.id
